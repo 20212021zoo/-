@@ -1,0 +1,377 @@
+import pygame
+import numpy as np
+import random
+
+import time
+
+# 初始化Pygame
+pygame.init()
+
+# 屏幕尺寸
+main_width, main_height = 900, 800
+control_width, control_height = 200, 800
+total_width = main_width + control_width
+screen = pygame.display.set_mode((total_width, main_height))
+pygame.display.set_caption("Dynamic Weaving Pattern with Control Panel")
+
+# 颜色定义
+white = (255, 255, 255)
+black = (0, 0, 0)
+initial_colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 165, 0), (75, 0, 130)]
+colors = initial_colors.copy()
+selected_color_index = 0
+random_colors_active = False
+random_pattern_active = False
+random_size_active = False
+lsd_effect_active = False
+psilocybin_effect_active = False
+dmt_effect_active = False
+
+# 初始参数
+rows, cols = 20, 20
+cell_width = main_width // cols
+cell_height = main_height // rows
+pattern = np.zeros((rows, cols), dtype=int)
+pattern_type = 'checkerboard'
+pattern_types = ['checkerboard', 'stripes', 'dots', 'diagonal', 'wave', 'zigzag']
+current_pattern_index = 0
+animation_speed = 10
+color_change_interval = 30  # 设置颜色变化的间隔帧数
+color_change_counter = 0
+pattern_change_interval = 15  # 设置图案变化的间隔秒数
+size_change_interval = 15  # 设置行列变化的间隔秒数
+last_pattern_change_time = time.time()
+last_size_change_time = time.time()
+
+# 插值相关参数
+interpolating = False
+start_rows, start_cols = rows, cols
+end_rows, end_cols = rows, cols
+interpolation_steps = 60  # 插值的步数
+interpolation_step = 0
+
+# 按钮类
+class Button:
+    def __init__(self, x, y, w, h, text, callback):
+        self.rect = pygame.Rect(x, y, w, h)
+        self.text = text
+        self.callback = callback
+        self.active = False
+
+    def draw(self, screen):
+        if self.active:
+            color = black
+            text_color = white
+        else:
+            color = white
+            text_color = black
+        pygame.draw.rect(screen, color, self.rect)
+        font = pygame.font.Font(None, 24)
+        text_surf = font.render(self.text, True, text_color)
+        screen.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+
+    def check_click(self, pos):
+        if self.rect.collidepoint(pos):
+            self.callback()
+            self.active = not self.active
+
+# 滑块类
+class Slider:
+    def __init__(self, x, y, w, min_val, max_val, initial_val, callback):
+        self.rect = pygame.Rect(x, y, w, 20)
+        self.min_val = min_val
+        self.max_val = max_val
+        self.val = initial_val
+        self.callback = callback
+        self.dragging = False
+
+    def draw(self, screen):
+        pygame.draw.rect(screen, black, self.rect, 2)
+        pos = (self.rect.x + (self.val - self.min_val) / (self.max_val - self.min_val) * self.rect.width, self.rect.centery)
+        pygame.draw.circle(screen, black, pos, 10)
+        font = pygame.font.Font(None, 24)
+        text_surf = font.render(str(int(self.val)), True, black)
+        screen.blit(text_surf, (self.rect.x + self.rect.width + 10, self.rect.y))
+
+    def check_click(self, pos):
+        if self.rect.collidepoint(pos):
+            self.dragging = True
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONUP:
+            self.dragging = False
+        elif event.type == pygame.MOUSEMOTION and self.dragging:
+            mouse_x = event.pos[0]
+            relative_x = mouse_x - self.rect.x
+            self.val = self.min_val + (self.max_val - self.min_val) * relative_x / self.rect.width
+            self.val = max(self.min_val, min(self.max_val, self.val))
+            self.callback(self.val)
+
+# 生成动态编织图案
+def update_pattern(t, pattern_type, rows, cols):
+    new_pattern = np.zeros((rows, cols), dtype=int)
+    if pattern_type == 'checkerboard':
+        for i in range(rows):
+            for j in range(cols):
+                new_pattern[i, j] = (i + j + t) % len(colors)
+    elif pattern_type == 'stripes':
+        for i in range(rows):
+            for j in range(cols):
+                new_pattern[i, j] = (i + t) % len(colors)
+    elif pattern_type == 'dots':
+        for i in range(rows):
+            for j in range(cols):
+                new_pattern[i, j] = ((i // 2 + j // 2 + t) % len(colors)) if (i % 2 == 0 and j % 2 == 0) else (t % len(colors))
+    elif pattern_type == 'diagonal':
+        for i in range(rows):
+            for j in range(cols):
+                new_pattern[i, j] = (i - j + t) % len(colors)
+    elif pattern_type == 'wave':
+        for i in range(rows):
+            for j in range(cols):
+                new_pattern[i, j] = (i + int(5 * np.sin(j / 3.0 + t))) % len(colors)
+    elif pattern_type == 'zigzag':
+        for i in range(rows):
+            for j in range(cols):
+                new_pattern[i, j] = (i + j + int(5 * np.sin(i / 3.0 + t))) % len(colors)
+    return new_pattern
+
+def apply_lsd_effect(t, rows, cols):
+    effect = np.zeros((rows, cols), dtype=int)
+    for i in range(rows):
+        for j in range(cols):
+            dx = int(10 * np.sin(t / 10.0 + i / 5.0))
+            dy = int(10 * np.cos(t / 10.0 + j / 5.0))
+            effect[i, j] = (i + j + dx + dy) % len(colors)
+    return effect
+
+def apply_psilocybin_effect(t, rows, cols):
+    effect = np.zeros((rows, cols), dtype=int)
+    for i in range(rows):
+        for j in range(cols):
+            dx = int(10 * np.sin(t / 5.0 + i / 10.0))
+            dy = int(10 * np.cos(t / 5.0 + j / 10.0))
+            effect[i, j] = (i + j + dx + dy) % len(colors)
+    return effect
+
+def apply_dmt_effect(t, rows, cols):
+    effect = np.zeros((rows, cols), dtype=int)
+    for i in range(rows):
+        for j in range(cols):
+            dx = int(20 * np.sin(t / 5.0 + i / 3.0))
+            dy = int(20 * np.sin(t / 5.0 + j / 3.0))
+            effect[i, j] = (i + j + dx + dy) % len(colors)
+            # 增加颜色变化
+            effect[i, j] = (effect[i, j] + int(10 * np.sin(t / 2.0))) % len(colors)
+    return effect
+
+# 按钮回调函数
+def next_pattern():
+    global current_pattern_index, pattern_type
+    current_pattern_index = (current_pattern_index + 1) % len(pattern_types)
+    pattern_type = pattern_types[current_pattern_index]
+
+def random_pattern():
+    global current_pattern_index, pattern_type
+    current_pattern_index = random.randint(0, len(pattern_types) - 1)
+    pattern_type = pattern_types[current_pattern_index]
+
+def random_size():
+    global start_rows, start_cols, end_rows, end_cols, interpolating, interpolation_step
+    start_rows, start_cols = rows, cols
+    end_rows = random.randint(10, 100)
+    end_cols = random.randint(10, 100)
+    interpolating = True
+    interpolation_step = 0
+
+def interpolate_size():
+    global rows, cols, interpolation_step, interpolating, cell_width, cell_height, pattern
+    if interpolating:
+        interpolation_step += 1
+        if interpolation_step > interpolation_steps:
+            interpolation_step = interpolation_steps
+            interpolating = False
+        rows = int(start_rows + (end_rows - start_rows) * (interpolation_step / interpolation_steps))
+        cols = int(start_cols + (end_cols - start_cols) * (interpolation_step / interpolation_steps))
+        sliders[0].val = rows
+        sliders[1].val = cols
+        cell_width = main_width // cols
+        cell_height = main_height // rows
+        pattern = update_pattern(t, pattern_type, rows, cols)
+
+def set_rows(val):
+    global rows, cell_height, pattern
+    rows = int(val)
+    cell_height = main_height // rows
+    pattern = update_pattern(t, pattern_type, rows, cols)
+
+def set_cols(val):
+    global cols, cell_width, pattern
+    cols = int(val)
+    cell_width = main_width // cols
+    pattern = update_pattern(t, pattern_type, rows, cols)
+
+def set_speed(val):
+    global animation_speed
+    animation_speed = int(val)
+
+def set_red(val):
+    global colors, selected_color_index
+    r = int(val)
+    g, b = colors[selected_color_index][1], colors[selected_color_index][2]
+    colors[selected_color_index] = (r, g, b)
+
+def set_green(val):
+    global colors, selected_color_index
+    g = int(val)
+    r, b = colors[selected_color_index][0], colors[selected_color_index][2]
+    colors[selected_color_index] = (r, g, b)
+
+def set_blue(val):
+    global colors, selected_color_index
+    b = int(val)
+    r, g = colors[selected_color_index][0], colors[selected_color_index][1]
+    colors[selected_color_index] = (r, g, b)
+
+def toggle_randomize_colors():
+    global random_colors_active
+    random_colors_active = not random_colors_active
+
+def toggle_random_pattern():
+    global random_pattern_active
+    random_pattern_active = not random_pattern_active
+
+def toggle_random_size():
+    global random_size_active
+    random_size_active = not random_size_active
+
+def toggle_lsd_effect():
+    global lsd_effect_active
+    lsd_effect_active = not lsd_effect_active
+
+def toggle_psilocybin_effect():
+    global psilocybin_effect_active
+    psilocybin_effect_active = not psilocybin_effect_active
+
+def toggle_dmt_effect():
+    global dmt_effect_active
+    dmt_effect_active = not dmt_effect_active
+
+# 创建按钮和滑块
+buttons = [
+    Button(main_width + 10, 10, 180, 50, "Next Pattern", next_pattern),
+    Button(main_width + 10, 70, 180, 50, "Random Pattern", toggle_random_pattern),
+    Button(main_width + 10, 130, 180, 50, "Random Size", toggle_random_size),
+    Button(main_width + 10, 550, 180, 50, "Randomize Colors", toggle_randomize_colors),
+    Button(main_width + 10, 610, 180, 50, "LSD Effect", toggle_lsd_effect),
+    Button(main_width + 10, 670, 180, 50, "Psilocybin Effect", toggle_psilocybin_effect),
+    Button(main_width + 10, 730, 180, 50, "DMT Effect", toggle_dmt_effect)
+]
+
+sliders = [
+    Slider(main_width + 10, 250, 180, 10, 100, rows, set_rows),
+    Slider(main_width + 10, 290, 180, 10, 100, cols, set_cols),
+    Slider(main_width + 10, 330, 180, 1, 60, animation_speed, set_speed)
+]
+
+color_sliders = [
+    Slider(main_width + 10, 470, 180, 0, 255, colors[selected_color_index][0], set_red),
+    Slider(main_width + 10, 510, 180, 0, 255, colors[selected_color_index][1], set_green),
+    Slider(main_width + 10, 550, 180, 0, 255, colors[selected_color_index][2], set_blue)
+]
+
+# 主循环
+running = True
+t = 0
+clock = pygame.time.Clock()
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            pos = pygame.mouse.get_pos()
+            for button in buttons:
+                button.check_click(pos)
+            for slider in sliders:
+                slider.check_click(pos)
+            for slider in color_sliders:
+                slider.check_click(pos)
+        elif event.type == pygame.MOUSEBUTTONUP or event.type == pygame.MOUSEMOTION:
+            for slider in sliders:
+                slider.handle_event(event)
+            for slider in color_sliders:
+                slider.handle_event(event)
+
+    # 更新图案
+    interpolate_size()
+    pattern = update_pattern(t, pattern_type, rows, cols)
+    if lsd_effect_active:
+        pattern = apply_lsd_effect(t, rows, cols)
+    if psilocybin_effect_active:
+        pattern = apply_psilocybin_effect(t, rows, cols)
+    if dmt_effect_active:
+        pattern = apply_dmt_effect(t, rows, cols)
+    t += 1
+
+    # 随机化颜色
+    if random_colors_active:
+        color_change_counter += 1
+        if color_change_counter >= color_change_interval:
+            r = random.randint(0, 255)
+            g = random.randint(0, 255)
+            b = random.randint(0, 255)
+            colors[selected_color_index] = (r, g, b)
+            # 更新滑块的值
+            color_sliders[0].val = r
+            color_sliders[1].val = g
+            color_sliders[2].val = b
+            color_change_counter = 0
+
+    # 随机化图案
+    if random_pattern_active and time.time() - last_pattern_change_time > pattern_change_interval:
+        random_pattern()
+        last_pattern_change_time = time.time()
+
+    # 随机化行列
+    if random_size_active and time.time() - last_size_change_time > size_change_interval:
+        random_size()
+        last_size_change_time = time.time()
+
+    # 绘制图案
+    screen.fill(white)
+    for i in range(rows):
+        for j in range(cols):
+            color = colors[pattern[i, j]]
+            pygame.draw.rect(screen, color, (j * cell_width, i * cell_height, cell_width, cell_height))
+
+    # 绘制控制面板
+    pygame.draw.rect(screen, white, (main_width, 0, control_width, control_height))
+    for button in buttons:
+        button.draw(screen)
+    for slider in sliders:
+        slider.draw(screen)
+
+    # 绘制滑块注释
+    font = pygame.font.Font(None, 24)
+    screen.blit(font.render("Rows", True, black), (main_width + 10, 230))
+    screen.blit(font.render("Cols", True, black), (main_width + 10, 270))
+    screen.blit(font.render("Speed", True, black), (main_width + 10, 310))
+
+    # 绘制颜色调整部分
+    color_change_text = font.render("Color Change", True, black)
+    screen.blit(color_change_text, (main_width + 10, 430))
+    for i, slider in enumerate(color_sliders):
+        slider.draw(screen)
+        color_label = ["Red", "Green", "Blue"][i]
+        label_text = font.render(color_label, True, black)
+        screen.blit(label_text, (main_width + 10, 450 + i * 40))
+
+    # 显示当前图案类型
+    pattern_text = font.render(f"Pattern: {pattern_type}", True, black)
+    screen.blit(pattern_text, (main_width + 10, 370))
+
+    pygame.display.flip()
+    clock.tick(animation_speed)  # 控制帧率
+
+pygame.quit()
