@@ -4,51 +4,61 @@ import math
 
 pygame.init()
 
-# Screen settings
+# ---------------- Settings ----------------
 screen_width, screen_height = 800, 600
 screen = pygame.display.set_mode((screen_width, screen_height))
 pygame.display.set_caption("Infinite River Defense Game")
 
-# Colors
+WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
+BLUE = (0, 0, 255)
 RED = (200, 0, 0)
-LIGHT_BLUE = (100, 100, 255)  # 河流浅蓝
-background_color = (255, 0, 255)
-MOUNTAIN_COLOR = (90, 70, 60)
-background_color = DIGITAL_PINK
 
-# Fonts
+
+background_color = 	(255, 64, 255)
 font_big = pygame.font.SysFont(None, 72)
 
-# Settings
 player_radius = 5
 breathing_speed = 0.02
-grid_size = 40
+
 river_width = 20
-max_distance_from_river = 100
-max_time_away = 5.0
+grid_size = 40
 max_tributary_level = 2
 
-class Mountain:
-    def __init__(self, start_pos):
-        self.points = [start_pos]
+max_distance_from_river = 100
+max_time_away = 5.0
+
+connection_chance = 0.04
+path_length = 500
+fade_time = 2.0
+
+# ---------------- Classes ----------------
+class LightPath:
+    def __init__(self, start):
+        self.start = start
+        self.points = [start]
+        self.time_alive = 0
+        self.path_length = path_length  # ✅ 添加这行
         self.generate_path()
 
     def generate_path(self):
-        length = random.randint(40, 80)
+        current = self.start
         angle = random.uniform(0, 2 * math.pi)
-        segments = random.randint(4, 7)
-        for _ in range(segments):
-            last_x, last_y = self.points[-1]
-            dx = length / segments * math.cos(angle + random.uniform(-0.3, 0.3))
-            dy = length / segments * math.sin(angle + random.uniform(-0.3, 0.3))
-            self.points.append((last_x + dx, last_y + dy))
+        for _ in range(self.path_length):
+            angle += random.uniform(-0.5, 0.5)  # 小范围偏移（越小越直）
+            dx = math.cos(angle) * grid_size
+            dy = math.sin(angle) * grid_size
+            current = (current[0] + dx, current[1] + dy)
+            self.points.append(current)
 
-    def draw(self, surface, offset_x, offset_y):
+    def draw(self, surface, offset_x, offset_y, alpha):
+        if len(self.points) < 2:
+            return
         for i in range(1, len(self.points)):
             start = (self.points[i-1][0] - offset_x, self.points[i-1][1] - offset_y)
             end = (self.points[i][0] - offset_x, self.points[i][1] - offset_y)
-            pygame.draw.line(surface, MOUNTAIN_COLOR, start, end, 3)
+            color = (BLUE[0], BLUE[1], BLUE[2], int(255 * alpha))
+            pygame.draw.line(surface, color, start, end, 10)
 
 class River:
     def __init__(self, start_pos, angle, level=0):
@@ -69,10 +79,11 @@ class River:
     def generate_tributaries(self):
         tributaries = []
         if self.level < max_tributary_level:
-            for i in range(10, len(self.points), 25):
+            for i in range(10, len(self.points), 20):
                 if random.random() < 0.3:
                     angle = random.uniform(0, 2 * math.pi)
-                    tributaries.append(River(self.points[i], angle, self.level + 1))
+                    tributary = River(self.points[i], angle, self.level + 1)
+                    tributaries.append(tributary)
         return tributaries
 
     def extend_river(self, offset_x, screen_width):
@@ -83,15 +94,16 @@ class River:
         for i in range(1, len(self.points)):
             start_pos = (self.points[i - 1][0] - offset_x, self.points[i - 1][1] - offset_y)
             end_pos = (self.points[i][0] - offset_x, self.points[i][1] - offset_y)
-            pygame.draw.line(screen, LIGHT_BLUE, start_pos, end_pos, river_width // (self.level + 1))
+            pygame.draw.line(screen, BLUE, start_pos, end_pos, river_width // (self.level + 1))
         for tributary in self.tributaries:
             tributary.extend_river(offset_x, screen_width)
             tributary.draw(offset_x, offset_y)
 
+# ---------------- Helper Functions ----------------
 def collect_all_river_points(river):
     all_points = list(river.points)
-    for t in river.tributaries:
-        all_points.extend(collect_all_river_points(t))
+    for tributary in river.tributaries:
+        all_points.extend(collect_all_river_points(tributary))
     return all_points
 
 def get_distance_to_closest_river_point(player_pos, river_points, offset_x, offset_y):
@@ -121,20 +133,6 @@ def draw_game_over():
     rect = text.get_rect(center=(screen_width // 2, screen_height // 2))
     screen.blit(text, rect)
 
-def generate_mountains_around(offset_x, offset_y, seen_chunks, mountain_list):
-    chunk_range = 3
-    for i in range(-chunk_range, chunk_range + 1):
-        for j in range(-chunk_range, chunk_range + 1):
-            cx = (offset_x // 200) + i
-            cy = (offset_y // 200) + j
-            key = (cx, cy)
-            if key not in seen_chunks:
-                seen_chunks.add(key)
-                for _ in range(random.randint(1, 3)):
-                    mx = cx * 200 + random.randint(-50, 50)
-                    my = cy * 200 + random.randint(-50, 50)
-                    mountain_list.append(Mountain((mx, my)))
-
 def reset_game():
     return {
         "offset_x": 0,
@@ -143,18 +141,20 @@ def reset_game():
         "time_away": 0,
         "main_river": River((0, screen_height // 2), 0),
         "game_over": False,
-        "mountains": [],
-        "seen_chunks": set(),
+        "paths": []
     }
 
-# Main
-player_pos = [screen_width // 2, screen_height // 2]
+# ---------------- Main Loop ----------------
 game = reset_game()
+player_pos = [screen_width // 2, screen_height // 2]
+draw_surface = pygame.Surface((screen_width, screen_height), pygame.SRCALPHA)
 clock = pygame.time.Clock()
 running = True
 
 while running:
-    dt = clock.tick(30) / 1000.0
+    dt = clock.tick(60) / 1000.0
+    game["breath_phase"] += breathing_speed
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -168,21 +168,50 @@ while running:
         if keys[pygame.K_UP]: game["offset_y"] -= 5
         if keys[pygame.K_DOWN]: game["offset_y"] += 5
 
-    game["breath_phase"] += breathing_speed
     screen.fill(background_color)
+    draw_surface.fill((0, 0, 0, 0))  # Clear light path layer
 
     if not game["game_over"]:
         draw_background(game["offset_x"], game["offset_y"], game["main_river"])
-
-        generate_mountains_around(game["offset_x"], game["offset_y"], game["seen_chunks"], game["mountains"])
-        for m in game["mountains"]:
-            m.draw(screen, game["offset_x"], game["offset_y"])
-
         draw_player(game["breath_phase"], player_pos)
 
-        all_points = collect_all_river_points(game["main_river"])
-        distance = get_distance_to_closest_river_point(player_pos, all_points, game["offset_x"], game["offset_y"])
-        game["time_away"] = game["time_away"] + dt if distance > max_distance_from_river else 0
+        # LightPath generation
+        if random.random() < connection_chance:
+            all_river_points = collect_all_river_points(game["main_river"])
+            if all_river_points:
+                spawn_point = random.choice(all_river_points)
+                game["paths"].append(LightPath(spawn_point))
+
+        # Draw & update LightPaths
+        for path in game["paths"][:]:
+            path.time_alive += dt
+            if path.time_alive > fade_time:
+                game["paths"].remove(path)
+            else:
+                alpha = max(0, 1 - path.time_alive / fade_time)
+                path.draw(draw_surface, game["offset_x"], game["offset_y"], alpha)
+
+        screen.blit(draw_surface, (0, 0))
+
+        # 收集所有“河流 + 神经路径”点
+        all_river_points = collect_all_river_points(game["main_river"])
+        all_light_points = []
+        for path in game["paths"]:
+            all_light_points.extend(path.points)
+
+        # 合并所有有效路径点
+        all_points = all_river_points + all_light_points
+
+        # 判断玩家是否离太远
+        distance = get_distance_to_closest_river_point(
+            player_pos, all_points, game["offset_x"], game["offset_y"]
+        )
+
+        if distance > max_distance_from_river:
+            game["time_away"] += dt
+        else:
+            game["time_away"] = 0
+
         if game["time_away"] > max_time_away:
             game["game_over"] = True
     else:
