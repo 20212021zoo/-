@@ -1,0 +1,256 @@
+import pygame
+import random
+import sys
+
+pygame.init()
+
+W, H = 1200, 900
+TILE_SIZE = 100
+ROWS, COLS = 6, 12
+FPS = 60
+BG_COLOR = (245, 245, 245)
+
+PALETTES = [
+    [(32, 32, 32), (220, 220, 220)],
+    [(30, 144, 255), (0, 191, 255)],
+    [(240, 200, 30), (200, 150, 0)],
+    [(34, 139, 34), (50, 205, 50)],
+    [(178, 34, 34), (255, 99, 71)],
+]
+
+class Slider:
+    def __init__(self, x, y, w, min_val, max_val, start_val, label):
+        self.rect = pygame.Rect(x, y, w, 20)
+        self.min_val = min_val
+        self.max_val = max_val
+        self.value = start_val
+        self.dragging = False
+        self.label = label
+        self.knob_x = self.rect.x + int((self.value - min_val)/(max_val - min_val) * self.rect.w)
+
+    def handle_event(self, e):
+        if e.type == pygame.MOUSEBUTTONDOWN and self.rect.collidepoint(e.pos):
+            self.dragging = True
+        elif e.type == pygame.MOUSEBUTTONUP:
+            self.dragging = False
+        elif e.type == pygame.MOUSEMOTION and self.dragging:
+            rel_x = min(max(e.pos[0], self.rect.x), self.rect.x + self.rect.w)
+            self.knob_x = rel_x
+            self.value = self.min_val + (rel_x - self.rect.x) / self.rect.w * (self.max_val - self.min_val)
+
+    def draw(self, surface):
+        pygame.draw.rect(surface, (200,200,200), self.rect)
+        pygame.draw.circle(surface, (100,100,255), (self.knob_x, self.rect.centery), 8)
+        font = pygame.font.SysFont(None, 20)
+        txt = font.render(f"{self.label}: {self.value:.3f}", True, (0,0,0))
+        surface.blit(txt, (self.rect.x, self.rect.y - 20))
+
+class Toggle:
+    def __init__(self, x, y, label):
+        self.rect = pygame.Rect(x, y, 80, 30)
+        self.state = True  # 默认开启
+        self.label = label
+
+    def handle_event(self, e):
+        if e.type == pygame.MOUSEBUTTONDOWN and self.rect.collidepoint(e.pos):
+            self.state = not self.state
+
+    def draw(self, surface):
+        color = (0,200,0) if self.state else (200,0,0)
+        pygame.draw.rect(surface, color, self.rect)
+        font = pygame.font.SysFont(None, 24)
+        txt = font.render(f"{self.label}: {'ON' if self.state else 'OFF'}", True, (255,255,255))
+        surface.blit(txt, (self.rect.x + 5, self.rect.y + 5))
+
+class TileGene:
+    def __init__(self):
+        self.pattern = random.choice(['diag','vert','horiz','stair'])
+        self.density = random.randint(6,16)
+        self.palette = random.choice(PALETTES)
+        self.rotate  = random.choice([0,90,180,270])
+
+    def copy(self):
+        g = TileGene()
+        g.pattern, g.density, g.palette, g.rotate = \
+            self.pattern, self.density, self.palette, self.rotate
+        return g
+
+def mutate_gene(g: TileGene) -> TileGene:
+    ng = g.copy()
+    if random.random() < .25:
+        ng.pattern = random.choice(['diag','vert','horiz','stair'])
+    if random.random() < .25:
+        ng.density = random.randint(6,16)
+    if random.random() < .20:
+        ng.palette = random.choice(PALETTES)
+    if random.random() < .30:
+        ng.rotate  = random.choice([0,90,180,270])
+    return ng
+
+def draw_tile(surface, rect, gene: TileGene):
+    tile_surf = pygame.Surface((rect.width, rect.height))
+    bg, fg = gene.palette[1], gene.palette[0]
+    tile_surf.fill(bg)
+    step = gene.density
+    if gene.pattern == 'vert':
+        for x in range(0, rect.width, step):
+            pygame.draw.line(tile_surf, fg, (x,0), (x,rect.height), 2)
+    elif gene.pattern == 'horiz':
+        for y in range(0, rect.height, step):
+            pygame.draw.line(tile_surf, fg, (0,y), (rect.width,y), 2)
+    elif gene.pattern == 'diag':
+        for x in range(-rect.height, rect.width, step):
+            pygame.draw.line(tile_surf, fg, (x,rect.height), (x+rect.height,0), 2)
+    elif gene.pattern == 'stair':
+        for y in range(0, rect.height, step):
+            if (y//step)%2==0:
+                pygame.draw.line(tile_surf, fg, (0,y), (rect.width,y), 2)
+            else:
+                pygame.draw.line(tile_surf, fg, (rect.width,y), (rect.width,y+step), 2)
+    rotated = pygame.transform.rotate(tile_surf, gene.rotate)
+    rw, rh = rotated.get_size()
+    offx = rect.x + (rect.width - rw)//2
+    offy = rect.y + (rect.height- rh)//2
+    surface.blit(rotated, (offx, offy))
+
+class CollageWorld:
+    def __init__(self, rows, cols):
+        self.rows = rows
+        self.cols = cols
+        self.grid = [[TileGene() for _ in range(cols)] for _ in range(rows)]
+
+    def get_neighbors(self, r, c):
+        # 八邻居（含对角线）
+        offsets = [(-1,0), (1,0), (0,-1), (0,1), (-1,-1), (-1,1), (1,-1), (1,1)]
+        neighbors = []
+        for dr, dc in offsets:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < self.rows and 0 <= nc < self.cols:
+                neighbors.append(self.grid[nr][nc])
+        return neighbors
+
+    def evaluate_fitness(self, gene, neighbors, pressure=False):
+        if not neighbors:
+            return 0.5
+        similarity = 0
+        for n in neighbors:
+            if gene.pattern == n.pattern:
+                similarity += 0.25
+            if gene.palette == n.palette:
+                similarity += 0.25
+            if abs(gene.density - n.density) < 6:
+                similarity += 0.25
+            if abs(gene.rotate - n.rotate) % 360 < 90:
+                similarity += 0.25
+        raw_score = similarity / len(neighbors)
+        if pressure:
+            if raw_score > 0.7:
+                raw_score += 0.2
+            elif raw_score < 0.3:
+                raw_score -= 0.3
+            raw_score = max(0.0, min(1.0, raw_score))
+        return raw_score
+
+    def evolve(self, mutation_rate, intensity, pressure=False):
+        new_grid = [[self.grid[r][c].copy() for c in range(self.cols)] for r in range(self.rows)]
+        for r in range(self.rows):
+            for c in range(self.cols):
+                gene = self.grid[r][c]
+                neighbors = self.get_neighbors(r, c)
+                fitness = self.evaluate_fitness(gene, neighbors, pressure)
+                if fitness < 0.3:
+                    new_grid[r][c] = mutate_gene(gene)
+                elif fitness < 0.7 and random.random() < mutation_rate:
+                    new_grid[r][c] = random.choice(neighbors).copy() if neighbors else mutate_gene(gene)
+                elif fitness < 0.9 and random.random() < mutation_rate * 0.3:
+                    new_grid[r][c] = mutate_gene(gene)
+        for _ in range(int(intensity)):
+            rr = random.randint(0, self.rows - 1)
+            cc = random.randint(0, self.cols - 1)
+            new_grid[rr][cc] = mutate_gene(self.grid[rr][cc])
+        self.grid = new_grid
+
+    def draw(self, surface):
+        for r in range(self.rows):
+            for c in range(self.cols):
+                x = c * TILE_SIZE
+                y = r * TILE_SIZE
+                rect = pygame.Rect(x, y, TILE_SIZE, TILE_SIZE)
+                draw_tile(surface, rect, self.grid[r][c])
+
+    def get_convergence_rate(self, pressure=False):
+        total = 0
+        count = 0
+        for r in range(self.rows):
+            for c in range(self.cols):
+                gene = self.grid[r][c]
+                neighbors = self.get_neighbors(r, c)
+                if neighbors:
+                    total += self.evaluate_fitness(gene, neighbors, pressure)
+                    count += 1
+        return total / count if count > 0 else 0
+
+def main():
+    screen = pygame.display.set_mode((W, H))
+    pygame.display.set_caption("Tile Evolution with Convergence Pressure")
+    clock = pygame.time.Clock()
+    world = CollageWorld(ROWS, COLS)
+
+    sliders = [
+        Slider(100, 750, 300, 0.0, 0.3, 0.01, "Mutation Rate"),
+        Slider(500, 750, 300, 0, 50, 3, "Mutation Intensity"),
+        Slider(900, 750, 200, 1, 60, 10, "Evolution Speed"),
+    ]
+
+    toggle = Toggle(1000, 800, "Pressure")  # 默认是开启状态
+
+    frame = 0
+    generation = 0
+    font = pygame.font.SysFont(None, 28)
+
+    running = True
+    while running:
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                running = False
+            elif e.type == pygame.KEYDOWN and e.key == pygame.K_SPACE:
+                world = CollageWorld(ROWS, COLS)
+                generation = 0
+            toggle.handle_event(e)
+            for s in sliders:
+                s.handle_event(e)
+
+        mutation_rate = sliders[0].value
+        mutation_strength = sliders[1].value
+        evo_speed = int(sliders[2].value)
+        pressure_on = toggle.state
+
+        if frame % evo_speed == 0:
+            world.evolve(mutation_rate, mutation_strength, pressure=pressure_on)
+            generation += 1
+        frame += 1
+
+        screen.fill(BG_COLOR)
+        world.draw(screen)
+
+        for s in sliders:
+            s.draw(screen)
+        toggle.draw(screen)
+
+        gen_text = font.render(f"Generation: {generation}", True, (0, 0, 0))
+        gen_rect = gen_text.get_rect(center=(W // 2, H - 25))
+        screen.blit(gen_text, gen_rect)
+
+        convergence = world.get_convergence_rate(pressure_on)
+        conv_text = font.render(f"Convergence: {convergence:.2f}", True, (20, 60, 20))
+        conv_rect = conv_text.get_rect(bottomright=(W - 20, H - 20))
+        screen.blit(conv_text, conv_rect)
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+    pygame.quit()
+    sys.exit()
+
+if __name__ == "__main__":
+    main()
