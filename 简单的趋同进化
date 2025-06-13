@@ -47,7 +47,7 @@ class Slider:
 
 class Toggle:
     def __init__(self, x, y, label):
-        self.rect = pygame.Rect(x, y, 80, 30)
+        self.rect = pygame.Rect(x, y, 115, 30)
         self.state = True  # 默认开启
         self.label = label
 
@@ -254,3 +254,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
