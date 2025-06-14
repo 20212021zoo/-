@@ -1,0 +1,102 @@
+import pygame
+import sys
+import random
+
+pygame.init()
+
+cols, rows = 18, 13
+cell_size = 80
+width = cols * cell_size
+height = rows * cell_size
+
+screen = pygame.display.set_mode((width, height))
+pygame.display.set_caption("Grid with Mosaic at Bottom")
+
+bg_color = (255, 255, 255)
+line_color = (180, 180, 180)
+connect_color = (0, 0, 255)
+
+points = [
+    (8, 2),
+    (9, 3),
+    (9, 5),
+    (10, 6),
+    (11, 5),
+    (13, 3),
+    (16, 6),
+    (15, 6),
+    (16, 7),
+    (15, 7),
+    (16, 8),
+    (15, 8),
+    (16, 9),
+    (15, 9),
+    (16, 10),
+    (14, 10),
+    (12, 8),
+    (10, 10),
+    (9, 11),
+    (11, 13),
+    (5, 13),
+    (7, 11),
+    (6, 10),
+    (4, 8),
+    (2, 10),
+    (0, 10),
+    (1, 9),
+    (0, 9),
+    (1, 8),
+    (0, 8),
+    (1, 7),
+    (0, 7),
+    (1, 6),
+    (0, 6),
+    (3, 3),
+    (5, 5),
+    (6, 6),
+    (7, 5),
+    (7, 3),
+    (8, 2)
+]
+
+shifted_points = [(x+1, y-1) for (x, y) in points]
+
+running = True
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    screen.fill(bg_color)
+
+    # 画网格线
+    for x in range(cols + 1):
+        pygame.draw.line(screen, line_color, (x * cell_size, 0), (x * cell_size, height))
+    for y in range(rows + 1):
+        pygame.draw.line(screen, line_color, (0, y * cell_size), (width, y * cell_size))
+
+    # 画连接线
+    for i in range(len(shifted_points) - 1):
+        (x1, y1) = shifted_points[i]
+        (x2, y2) = shifted_points[i + 1]
+        if (0 <= x1 <= cols and 0 <= y1 <= rows) and (0 <= x2 <= cols and 0 <= y2 <= rows):
+            pygame.draw.line(screen, connect_color,
+                             (x1 * cell_size, y1 * cell_size),
+                             (x2 * cell_size, y2 * cell_size), 4)
+
+    # 画底部一行马赛克色块
+    mosaic_y = rows - 1  # 最后一行索引12
+    mosaic_size = cell_size // 2
+    offset = (cell_size - mosaic_size) // 2  # 居中小方块
+
+    for col in range(cols):
+        rect_x = col * cell_size + offset
+        rect_y = mosaic_y * cell_size + offset
+        # 随机颜色
+        color = (random.randint(50, 255), random.randint(50, 255), random.randint(50, 255))
+        pygame.draw.rect(screen, color, (rect_x, rect_y, mosaic_size, mosaic_size))
+
+    pygame.display.flip()
+
+pygame.quit()
+sys.exit()
