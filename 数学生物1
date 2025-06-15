@@ -1,0 +1,427 @@
+import pygame
+import math
+import sys
+import random
+
+pygame.init()
+w, h = 1920, 1080  # 修改画面高度为1080
+screen = pygame.display.set_mode((w, h))
+clock = pygame.time.Clock()
+
+center_x = w // 2
+center_y = h // 2
+num_vertebrae = 40
+layers = 3
+
+custom_depths = [0.0, 0.8, 1.6]
+
+auto_pos_offset_amp = 10
+auto_pos_offset_speed = 1
+
+def vertebra_spacing(i):
+    min_spacing = 28
+    max_spacing = 42
+    pos = i / (num_vertebrae - 1)
+    return min_spacing + (max_spacing - min_spacing) * math.sin(math.pi * pos)
+
+def vertebra_scale(i):
+    pos = i / (num_vertebrae - 1)
+    return 0.3 + 0.7 * math.sin(math.pi * pos)
+
+def rib_length(i, scale):
+    pos = i / (num_vertebrae - 1)
+    max_len = 90 * scale
+    return max_len * math.sin(math.pi * pos)
+
+def rib_angle(i, t):
+    base_angle = math.pi / 6
+    return base_angle * math.sin(t * 3 + i)
+
+def dynamic_offset(x, y, t):
+    k = (4 + math.sin(y * 2 - t) * 3) * math.cos(x / 29)
+    e = y / 8 - 13
+    d = math.hypot(k, e)
+    c = d - t
+    q = 3 * math.sin(k * 2) + 0.3 / (k if k != 0 else 1) + math.sin(y / 25) * k * (9 + 4 * math.sin(e * 9 - d * 3 + t * 2))
+    offset_x = q + 30 * math.cos(c) + 200
+    offset_y = 9 * math.sin(c) + d * 39 - 220
+    return offset_x - 200, offset_y - 220
+
+def vertebra_points(cx, cy, scale=1.0):
+    points = []
+    for i in range(30):
+        angle = math.pi * i / 29
+        x = cx + scale * 20 * math.cos(angle)
+        y = cy + scale * 30 * math.sin(angle)
+        points.append((x, y))
+    for i in range(30):
+        angle = math.pi + math.pi * i / 29
+        x = cx + scale * 15 * math.cos(angle)
+        y = cy + scale * 18 * math.sin(angle)
+        if i % 3 == 0:
+            points.append((x, y))
+    spine_base_x = cx - scale * 10
+    spine_base_y = cy
+    for i in range(12):
+        offset_x = scale * (- (i - 6) ** 2 / 6 + 6)
+        offset_y = scale * (i * 2 - 11)
+        points.append((spine_base_x - offset_x, spine_base_y + offset_y))
+    for side in [-1, 1]:
+        base_x = cx + scale * 5
+        base_y = cy + side * scale * 35
+        for i in range(15):
+            angle = 2 * math.pi * i / 14
+            x = base_x + scale * 6 * math.cos(angle)
+            y = base_y + scale * 10 * math.sin(angle)
+            points.append((x, y))
+    return points
+
+def rib_points(start_x, start_y, length, side, t, index, float_amp=1.0):
+    points = []
+    segments = 15
+    for i in range(segments + 1):
+        ratio = i / segments
+        angle = math.pi / 6 * math.sin(t * 2 * float_amp + index + ratio * 3)
+        x = start_x + length * ratio * math.sin(angle)
+        y = start_y + side * length * ratio * math.cos(angle)
+        points.append((x, y))
+    return points
+
+def smooth_points(points, num=16):
+    def catmull_rom(p0, p1, p2, p3, t):
+        t2 = t * t
+        t3 = t2 * t
+        x = 0.5 * ((2 * p1[0]) +
+                   (-p0[0] + p2[0]) * t +
+                   (2*p0[0] - 5*p1[0] + 4*p2[0] - p3[0]) * t2 +
+                   (-p0[0] + 3*p1[0] - 3*p2[0] + p3[0]) * t3)
+        y = 0.5 * ((2 * p1[1]) +
+                   (-p0[1] + p2[1]) * t +
+                   (2*p0[1] - 5*p1[1] + 4*p2[1] - p3[1]) * t2 +
+                   (-p0[1] + 3*p1[1] - 3*p2[1] + p3[1]) * t3)
+        return (x, y)
+    smoothed = []
+    n = len(points)
+    for i in range(n):
+        p0 = points[i - 1 if i - 1 >= 0 else n - 1]
+        p1 = points[i]
+        p2 = points[(i + 1) % n]
+        p3 = points[(i + 2) % n]
+        for t_ in [j / num for j in range(num)]:
+            smoothed.append(catmull_rom(p0, p1, p2, p3, t_))
+    return smoothed
+
+def apply_lighting(x, y, cx, cy, light_dir=(1, -1)):
+    nx = x - cx
+    ny = y - cy
+    length = math.hypot(nx, ny)
+    if length == 0:
+        return 1.0
+    nx /= length
+    ny /= length
+
+    lx, ly = light_dir
+    l_length = math.hypot(lx, ly)
+    lx /= l_length
+    ly /= l_length
+
+    dot = nx * lx + ny * ly
+
+    intensity = 0.4 + 0.6 * max(dot, 0)
+
+    return intensity
+
+def draw_cad_grid(surface, origin, width, height, step=50):
+    ox, oy = origin
+    color_axis = (255, 255, 255)
+    color_tick = (255, 255, 255)
+    font = pygame.font.SysFont("consolas", 14)
+
+    tick_length = 12
+
+    pygame.draw.line(surface, color_axis, (ox, oy), (ox + width, oy), 2)
+    pygame.draw.polygon(surface, color_axis, [
+        (ox + width, oy),
+        (ox + width - 18, oy - 9),
+        (ox + width - 18, oy + 9)
+    ])
+
+    pygame.draw.line(surface, color_axis, (ox, oy), (ox, oy - height), 2)
+    pygame.draw.polygon(surface, color_axis, [
+        (ox, oy - height),
+        (ox - 9, oy - height + 18),
+        (ox + 9, oy - height + 18)
+    ])
+
+    for x in range(0, width + 1, step):
+        tick_x = ox + x
+        pygame.draw.line(surface, color_tick, (tick_x, oy - tick_length // 2), (tick_x, oy + tick_length // 2), 1)
+        label = font.render(str(x), True, color_tick)
+        surface.blit(label, (tick_x - label.get_width() // 2, oy + tick_length // 2 + 4))
+
+    for y in range(0, height + 1, step):
+        tick_y = oy - y
+        pygame.draw.line(surface, color_tick, (ox - tick_length // 2, tick_y), (ox + tick_length // 2, tick_y), 1)
+        label = font.render(str(y), True, color_tick)
+        surface.blit(label, (ox - label.get_width() - tick_length // 2 - 6, tick_y - label.get_height() // 2))
+
+def draw_neural_fibers(surface, centers, t, num_fibers=5, max_length=130, branch_chance=0.5):
+    random.seed(42)  # 保持稳定性，可去掉变随机
+    for (cx, cy, scale) in centers:
+        for i in range(num_fibers):
+            points = [(cx, cy)]
+            base_angle = (2 * math.pi / num_fibers) * i + t * 0.3
+            length = max_length * scale * (0.7 + 0.6 * math.sin(t + i))
+            segments = 6
+            angles = []
+            # 生成每段的弯曲角度，带摇摆和随机扰动
+            for s in range(segments):
+                sway = 0.15 * math.sin(t * 2 + s + i)
+                random_offset = random.uniform(-0.1, 0.1)
+                angles.append(base_angle + sway + random_offset)
+            # 计算点位置
+            for s in range(1, segments + 1):
+                seg_len = length * (1 - s / (segments + 1))
+                angle = angles[s - 1]
+                x = points[-1][0] + seg_len * math.cos(angle)
+                y = points[-1][1] + seg_len * math.sin(angle)
+                points.append((x, y))
+                # 分叉处理
+                if s == segments // 2 and random.random() < branch_chance:
+                    branch_points = []
+                    branch_angle = angle + (math.pi / 4) * (1 if i % 2 == 0 else -1)
+                    branch_length = seg_len * 0.6
+                    branch_segments = 3
+                    for bs in range(branch_segments):
+                        blen = branch_length * (1 - bs / branch_segments)
+                        bx = points[-1][0] + blen * math.cos(branch_angle)
+                        by = points[-1][1] + blen * math.sin(branch_angle)
+                        branch_points.append((bx, by))
+                        branch_angle += 0.1 * math.sin(t * 5 + bs)
+                    pygame.draw.aalines(surface, (255, 255, 255, 120), False, [points[-1]] + branch_points)
+            pygame.draw.aalines(surface, (255, 255, 255, 180), False, points)
+
+def draw_energy_flow(surface, outline_points, t, num_paths=2, path_length=120, glow_layers=8):
+    length = len(outline_points)
+    for path_i in range(num_paths):
+        offset = int((t * 60 + path_i * (length / num_paths)) % length)
+        points = []
+        for i in range(path_length):
+            idx = (offset + i) % length
+            x, y = outline_points[idx]
+            idx_prev = (idx - 1) % length
+            idx_next = (idx + 1) % length
+            dx = outline_points[idx_next][0] - outline_points[idx_prev][0]
+            dy = outline_points[idx_next][1] - outline_points[idx_prev][1]
+            length_vec = math.hypot(dx, dy)
+            if length_vec == 0:
+                length_vec = 1
+            nx = -dy / length_vec
+            ny = dx / length_vec
+            phase = t * 5 + i * 0.3 + path_i * 2
+            disp = 3 * math.sin(phase)
+            px = x + nx * disp
+            py = y + ny * disp
+            points.append((px, py))
+
+        base_alpha = 60
+        max_radius = 6
+        for layer in range(glow_layers, 0, -1):
+            alpha = int(base_alpha * (layer / glow_layers) * (0.7 + 0.3 * math.sin(t * 3 + path_i)))
+            radius = max_radius * (layer / glow_layers)
+            glow_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+            color = (255, 255, 255, alpha)
+            if len(points) > 1:
+                pygame.draw.aalines(glow_surf, color, False, points, blend=1)
+            for i_p in range(len(points)):
+                pygame.draw.circle(glow_surf, color, (int(points[i_p][0]), int(points[i_p][1])), int(radius))
+            surface.blit(glow_surf, (0, 0))
+
+running = True
+t = 0
+
+while running:
+    screen.fill((0, 0, 0))
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    pos_offset_y = auto_pos_offset_amp * math.sin(t * auto_pos_offset_speed)
+
+    float_amplitude = 1.5 + 0.5 * math.sin(t * 0.1)
+    speed = 1.5 + 0.5 * math.sin(t * 0.15)
+
+    total_length = sum(vertebra_spacing(i) for i in range(num_vertebrae))
+    start_x = center_x - total_length / 2
+
+    vertebra_centers = []
+    current_x = start_x
+    for i in range(num_vertebrae):
+        spacing = vertebra_spacing(i)
+        scale = vertebra_scale(i)
+        current_x += spacing
+        curve_y = 50 * math.sin(i * 0.3 + t * 0.5) * (1 - i / num_vertebrae)
+        breath = 5 * math.sin(t * 3 * float_amplitude + i)
+        cx = current_x
+        cy = center_y + curve_y + breath + pos_offset_y
+
+        dx, dy = dynamic_offset(cx, cy, t)
+        cx += dx * 0.002
+        cy += dy * 0.002
+
+        vertebra_centers.append((cx, cy, scale))
+
+    for i, (cx, cy, scale) in enumerate(vertebra_centers):
+        points = vertebra_points(cx, cy, scale)
+        for x, y in points:
+            dist = math.hypot(x - cx, y - cy)
+            base_radius = max(1, int(4 - dist / 15))
+            light_factor = apply_lighting(x, y, cx, cy)
+            radius = max(1, int(base_radius * light_factor))
+            color = (255, 255, 255)
+            pygame.draw.circle(screen, color, (int(x), int(y)), radius)
+
+    for i in range(len(vertebra_centers) - 1):
+        start = vertebra_centers[i]
+        end = vertebra_centers[i + 1]
+        steps = 20
+        for s in range(steps + 1):
+            t_ratio = s / steps
+            cx_ctrl = (start[0] + end[0]) / 2
+            cy_ctrl = (start[1] + end[1]) / 2 + 40 * math.sin(t * 2 * float_amplitude + i)
+            x = (1 - t_ratio) ** 2 * start[0] + 2 * (1 - t_ratio) * t_ratio * cx_ctrl + t_ratio ** 2 * end[0]
+            y = (1 - t_ratio) ** 2 * start[1] + 2 * (1 - t_ratio) * t_ratio * cy_ctrl + t_ratio ** 2 * end[1]
+            radius = 2
+            pygame.draw.circle(screen, (255, 255, 255), (int(x), int(y)), radius)
+
+    for i, (cx, cy, scale) in enumerate(vertebra_centers):
+        length_up = rib_length(i, scale)
+        length_down = rib_length(i, scale)
+        rib_start_up = (cx, cy - scale * 35)
+        rib_start_down = (cx, cy + scale * 35)
+
+        rib_pts_up = rib_points(rib_start_up[0], rib_start_up[1], length_up, -1, t, i, float_amplitude)
+        for p in rib_pts_up:
+            pygame.draw.circle(screen, (255, 255, 255), (int(p[0]), int(p[1])), 3)
+        pygame.draw.aalines(screen, (255, 255, 255), False, rib_pts_up)
+
+        rib_pts_down = rib_points(rib_start_down[0], rib_start_down[1], length_down, 1, t, i, float_amplitude)
+        for p in rib_pts_down:
+            pygame.draw.circle(screen, (255, 255, 255), (int(p[0]), int(p[1])), 3)
+        pygame.draw.aalines(screen, (255, 255, 255), False, rib_pts_down)
+
+    outline_pts = []
+    for i in reversed(range(num_vertebrae)):
+        cx, cy, scale = vertebra_centers[i]
+        rib_start_up = (cx, cy - scale * 35)
+        length = rib_length(i, scale)
+        angle = math.pi / 4 * math.sin(t * 3 * float_amplitude + i)
+        x = rib_start_up[0] + length * math.sin(angle)
+        y = rib_start_up[1] - length * math.cos(angle)
+        outline_pts.append((x, y))
+
+    for i in range(num_vertebrae):
+        cx, cy, scale = vertebra_centers[i]
+        x = cx + 15 * math.cos(t + i)
+        y = cy
+        outline_pts.append((x, y))
+
+    for i in range(num_vertebrae):
+        cx, cy, scale = vertebra_centers[i]
+        rib_start_down = (cx, cy + scale * 35)
+        length = rib_length(i, scale)
+        angle = math.pi / 4 * math.sin(t * 3 * float_amplitude + i + math.pi)
+        x = rib_start_down[0] + length * math.sin(angle)
+        y = rib_start_down[1] - length * math.cos(angle)
+        outline_pts.append((x, y))
+
+    smooth_outline = smooth_points(outline_pts, num=20)
+
+    overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+    max_depth = 20
+
+    for layer in range(layers):
+        depth_ratio = custom_depths[layer]
+        base_thickness = 2.0 * (1 + float_amplitude * 0.5)
+        thickness = base_thickness * (1 - min(depth_ratio, 1) * 0.8)
+        base_alpha = 150 * (1 - min(depth_ratio, 1))
+        for pt in smooth_outline:
+            dx = pt[0] - center_x
+            dy = pt[1] - center_y
+            dist = math.hypot(dx, dy)
+            max_dist = 400
+
+            z = max_depth * math.cos(min(dist / max_dist, 1) * math.pi / 2)
+            offset_x = dx * 0.12 * depth_ratio * math.sin(t * 2 * (1 + float_amplitude * 0.5) + layer)
+            offset_y = dy * 0.12 * depth_ratio * math.cos(t * 2 * (1 + float_amplitude * 0.5) + layer)
+
+            x = int(pt[0] + offset_x)
+            y = int(pt[1] + offset_y - z + pos_offset_y)
+
+            alpha_wave = 0.5 + 0.5 * math.sin(t * 7 + pt[0] * 0.1 + pt[1] * 0.15 + layer)
+            alpha = base_alpha * alpha_wave
+            alpha = max(0, min(255, int(alpha)))
+
+            color = (255, 255, 255, alpha)
+
+            pygame.draw.circle(overlay, color, (x, y), max(1, int(thickness)))
+
+    screen.blit(overlay, (0, 0))
+
+    num_lines = 3
+    max_line_length = 80
+    wave_amp = 6
+    wave_freq = 0.15
+    line_alpha = 180
+    growth_speed = 30
+
+    for line_i in range(num_lines):
+        points = []
+        offset = int(t * 30 + line_i * max_line_length * 0.33)
+        current_length = min(max_line_length, int(t * growth_speed))
+        for i_ in range(current_length):
+            idx = (offset + i_) % len(smooth_outline)
+            base_x, base_y = smooth_outline[idx]
+
+            idx_prev = (idx - 1) % len(smooth_outline)
+            idx_next = (idx + 1) % len(smooth_outline)
+            dx = smooth_outline[idx_next][0] - smooth_outline[idx_prev][0]
+            dy = smooth_outline[idx_next][1] - smooth_outline[idx_prev][1]
+            length_vec = math.hypot(dx, dy)
+            if length_vec == 0:
+                length_vec = 1
+            nx = -dy / length_vec
+            ny = dx / length_vec
+
+            phase = t * 3 + i_ * wave_freq + line_i * 2
+            disp = wave_amp * math.sin(phase)
+
+            x = base_x + nx * disp
+            y = base_y + ny * disp
+
+            points.append((x, y))
+
+        if len(points) > 1:
+            line_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+            pygame.draw.aalines(line_surf, (255, 255, 255, line_alpha), False, points)
+            screen.blit(line_surf, (0, 0))
+
+    margin_x = 80
+    margin_y = 60
+    grid_width = 600
+    grid_height = 300
+
+    draw_cad_grid(screen, (margin_x, h - margin_y), grid_width, grid_height, step=50)
+
+    neural_surface = pygame.Surface((w, h), pygame.SRCALPHA)
+    draw_neural_fibers(neural_surface, vertebra_centers, t)
+    screen.blit(neural_surface, (0, 0))
+
+    draw_energy_flow(screen, smooth_outline, t, num_paths=3, path_length=120, glow_layers=8)
+
+    pygame.display.flip()
+    t += 0.02
+    clock.tick(60)
+
+pygame.quit()
+sys.exit()
