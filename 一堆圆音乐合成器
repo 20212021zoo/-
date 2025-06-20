@@ -1,0 +1,215 @@
+import pygame
+import sys
+import math
+import numpy as np
+import random
+
+pygame.init()
+
+# 音频参数
+SAMPLE_RATE = 44100
+SOUND_DURATION = 0.1
+AMPLITUDE = 4096
+
+def generate_square_wave(frequency):
+    t = np.linspace(0, SOUND_DURATION, int(SAMPLE_RATE * SOUND_DURATION), False)
+    wave = AMPLITUDE * np.sign(np.sin(2 * np.pi * frequency * t))
+    stereo_wave = np.repeat(wave[:, np.newaxis], 2, axis=1)
+    return pygame.sndarray.make_sound(stereo_wave.astype(np.int16))
+
+frequencies = [400, 900, 600, 200, 500, 700]
+sounds = [generate_square_wave(freq) for freq in frequencies]
+
+# 缩放
+scale = 0.9
+base_width, base_height = 1800, 1200
+screen_width = int(base_width * scale)
+screen_height = int(base_height * scale)
+screen = pygame.display.set_mode((screen_width + 200, screen_height))
+pygame.display.set_caption("图像声音合成器 + 滑动控制条 + 控制按钮")
+
+clock = pygame.time.Clock()
+
+# 初始格子行列
+original_regions = [
+    {"cols": 3, "rows": 3},
+    {"cols": 9, "rows": 9},
+    {"cols": 3, "rows": 9},
+    {"cols": 1, "rows": 1},
+    {"cols": 4, "rows": 4},
+    {"cols": 8, "rows": 4},
+]
+
+# 保留初始比例
+def get_proportion(cols, rows):
+    return rows / cols if cols != 0 else 1
+
+original_proportions = [get_proportion(r["cols"], r["rows"]) for r in original_regions]
+
+region_positions = [
+    (0, 0, 1/3, 1/2),
+    (1/3, 0, 1/3, 1/2),
+    (2/3, 0, 1/3, 1/2),
+    (0, 1/2, 1/3, 1/2),
+    (1/3, 1/2, 1/3, 1/2),
+    (2/3, 1/2, 1/3, 1/2),
+]
+
+def generate_triggers(cols, rows, total_steps, wave_length):
+    triggers = [[0 for _ in range(cols)] for _ in range(rows)]
+    order = 0
+    for row in range(rows):
+        for col in range(cols):
+            base = int(wave_length * order / max(total_steps - 1, 1))
+            triggers[row][col] = base + random.randint(-5, 5)
+            order += 1
+    return triggers
+
+duration = 90
+wave_length = 60
+
+initial_regions = [r.copy() for r in original_regions]
+triggers = [
+    generate_triggers(r["cols"], r["rows"], r["cols"] * r["rows"], wave_length)
+    for r in initial_regions
+]
+
+c0 = (255, 255, 0)
+c1 = (0, 0, 128)
+
+def lerp_color(c0, c1, t):
+    return (
+        int(c0[0] + (c1[0] - c0[0]) * t),
+        int(c0[1] + (c1[1] - c0[1]) * t),
+        int(c0[2] + (c1[2] - c0[2]) * t)
+    )
+
+fade_surface = pygame.Surface((screen_width, screen_height), pygame.SRCALPHA)
+frame = 0
+
+# 控制滑条数据
+sliders = [{"value": r["cols"], "min": 1, "max": 12} for r in initial_regions]
+slider_positions = [(screen_width + 100, 100 + i * 100) for i in range(6)]
+slider_height = 80
+slider_width = 10
+slider_grabbed = None
+
+# 按钮定义
+button_font = pygame.font.SysFont(None, 28)
+reset_button = pygame.Rect(screen_width + 50, 750, 100, 30)
+random_button = pygame.Rect(screen_width + 50, 790, 100, 30)
+
+def apply_reset():
+    for i, orig in enumerate(original_regions):
+        initial_regions[i]["cols"] = orig["cols"]
+        initial_regions[i]["rows"] = orig["rows"]
+        sliders[i]["value"] = orig["cols"]
+        triggers[i] = generate_triggers(orig["cols"], orig["rows"], orig["cols"] * orig["rows"], wave_length)
+
+def apply_random():
+    seen = set()
+    for i in range(len(initial_regions)):
+        attempts = 0
+        while attempts < 100:
+            val = random.randint(sliders[i]["min"], sliders[i]["max"])
+            proportion = original_proportions[i]
+            rows = max(1, round(val * proportion))
+            key = (val, rows)
+            if key not in seen:
+                seen.add(key)
+                sliders[i]["value"] = val
+                initial_regions[i]["cols"] = val
+                initial_regions[i]["rows"] = rows
+                triggers[i] = generate_triggers(val, rows, val * rows, wave_length)
+                break
+            attempts += 1
+
+running = True
+while running:
+    clock.tick(60)
+
+    fade_surface.fill((0, 0, 0, 40))
+    screen.blit(fade_surface, (0, 0))
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            mx, my = event.pos
+            if reset_button.collidepoint(mx, my):
+                apply_reset()
+            elif random_button.collidepoint(mx, my):
+                apply_random()
+            else:
+                for i, (sx, sy) in enumerate(slider_positions):
+                    if sx - 10 <= mx <= sx + 10 and sy <= my <= sy + slider_height:
+                        slider_grabbed = i
+                        break
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            slider_grabbed = None
+
+        elif event.type == pygame.MOUSEMOTION and slider_grabbed is not None:
+            _, y = event.pos
+            relative_y = max(0, min(slider_height, y - slider_positions[slider_grabbed][1]))
+            value = sliders[slider_grabbed]["max"] - int((relative_y / slider_height) * (sliders[slider_grabbed]["max"] - sliders[slider_grabbed]["min"]))
+            sliders[slider_grabbed]["value"] = value
+            proportion = original_proportions[slider_grabbed]
+            rows = max(1, round(value * proportion))
+            initial = initial_regions[slider_grabbed]
+            initial["cols"] = value
+            initial["rows"] = rows
+            triggers[slider_grabbed] = generate_triggers(value, rows, value * rows, wave_length)
+
+    def draw_and_sound(region_index, rx, ry, rw, rh):
+        region = initial_regions[region_index]
+        cols, rows = region["cols"], region["rows"]
+        trigger = triggers[region_index]
+        cw = int(rw * screen_width) // max(cols, 1)
+        ch = int(rh * screen_height) // max(rows, 1)
+        offset_x = int(rx * screen_width)
+        offset_y = int(ry * screen_height)
+        for row in range(rows):
+            for col in range(cols):
+                if row >= len(trigger) or col >= len(trigger[row]):
+                    continue
+                trig = trigger[row][col]
+                if frame < trig:
+                    continue
+                local_frame = (frame - trig) % duration
+                if local_frame == 0:
+                    sounds[region_index].play()
+                t = local_frame / duration
+                radius = int(math.hypot(cw, ch) * 0.5 * t)
+                surf = pygame.Surface((cw, ch), pygame.SRCALPHA)
+                cx, cy = cw // 2, ch // 2
+                for r in range(radius, 0, -3):
+                    alpha = int(255 * (1 - r / radius)) if radius else 0
+                    color = lerp_color(c0, c1, r / radius if radius else 0)
+                    color_with_alpha = (*color, alpha)
+                    pygame.draw.circle(surf, color_with_alpha, (cx, cy), r)
+                screen.blit(surf, (offset_x + col * cw, offset_y + row * ch))
+
+    for idx, (rx, ry, rw, rh) in enumerate(region_positions):
+        draw_and_sound(idx, rx, ry, rw, rh)
+
+    for i, slider in enumerate(sliders):
+        sx, sy = slider_positions[i]
+        pygame.draw.rect(screen, (100, 100, 100), (sx - slider_width // 2, sy, slider_width, slider_height))
+        handle_y = sy + int((1 - (slider["value"] - slider["min"]) / (slider["max"] - slider["min"])) * slider_height)
+        pygame.draw.rect(screen, (255, 255, 255), (sx - 10, handle_y - 5, 20, 10))
+        font = pygame.font.SysFont(None, 24)
+        label = font.render(str(slider["value"]), True, (255, 255, 255))
+        screen.blit(label, (sx - 10, sy + slider_height + 5))
+
+    pygame.draw.rect(screen, (50, 150, 50), reset_button)
+    pygame.draw.rect(screen, (150, 50, 50), random_button)
+    screen.blit(button_font.render("Reset", True, (255, 255, 255)), (reset_button.x + 20, reset_button.y + 5))
+    screen.blit(button_font.render("Random", True, (255, 255, 255)), (random_button.x + 10, random_button.y + 5))
+
+    pygame.display.flip()
+    frame += 1
+
+pygame.quit()
+sys.exit()
