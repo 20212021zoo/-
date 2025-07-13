@@ -1,0 +1,357 @@
+import pygame
+import sys
+import random
+import math
+
+# 初始化pygame
+pygame.init()
+
+# ------------------- 画布和网格设置 -------------------
+cols, rows = 18, 13  # 网格列数和行数
+cell_size = 70  # 每个格子像素大小
+width = cols * cell_size  # 总画面宽度
+height = rows * cell_size  # 总画面高度
+
+screen = pygame.display.set_mode((width, height))
+pygame.display.set_caption("Mosaic with Time-Space Wave Color Evolution")
+
+# ------------------- 颜色定义 -------------------
+bg_color = (255, 255, 255)  # 背景色白色
+line_color = (180, 180, 180)  # 网格线颜色
+connect_color = (0, 0, 255)  # 多边形边线颜色 蓝色
+
+# 颜色选项，白色改为浅灰色(220,220,220)
+color_choices = [
+    (255, 10, 0),  # 红
+    (255, 255, 0),  # 黄
+    (0, 0, 255),  # 蓝
+    (0, 255, 0),  # 绿
+    (255, 20, 147),    # 数字粉（深鲜粉）
+    (0, 0, 0),  # 黑
+    (220, 220, 220)    # 浅灰（代替白色）
+]
+
+# ------------------- 多边形顶点 -------------------
+points = [
+    (8, 2), (9, 3), (9, 5), (10, 6), (11, 5), (13, 3), (16, 6),
+    (15, 6), (16, 7), (15, 7), (16, 8), (15, 8), (16, 9), (15, 9),
+    (16, 10), (14, 10), (12, 8), (10, 10), (9, 11), (11, 13), (5, 13),
+    (7, 11), (6, 10), (4, 8), (2, 10), (0, 10), (1, 9), (0, 9),
+    (1, 8), (0, 8), (1, 7), (0, 7), (1, 6), (0, 6), (3, 3), (5, 5),
+    (6, 6), (7, 5), (7, 3), (8, 2)
+]
+
+# 坐标偏移以适配网格坐标
+shifted_points = [(x + 1, y - 1) for (x, y) in points]
+# 转换为像素坐标
+poly_points_px = [(x * cell_size, y * cell_size) for x, y in shifted_points]
+
+# ------------------- 辅助函数 -------------------
+
+def point_in_polygon(x, y, polygon):
+    """判断点是否在多边形内，射线法"""
+    n = len(polygon)
+    inside = False
+    px, py = x, y
+    for i in range(n):
+        x1, y1 = polygon[i]
+        x2, y2 = polygon[(i + 1) % n]
+        if ((y1 > py) != (y2 > py)) and (px < (x2 - x1) * (py - y1) / (y2 - y1 + 1e-9) + x1):
+            inside = not inside
+    return inside
+
+def lines_intersect(a1, a2, b1, b2):
+    """判断两条线段是否相交"""
+
+    def ccw(p1, p2, p3):
+        return (p3[1] - p1[1]) * (p2[0] - p1[0]) > (p2[1] - p1[1]) * (p3[0] - p1[0])
+
+    return (ccw(a1, b1, b2) != ccw(a2, b1, b2)) and (ccw(a1, a2, b1) != ccw(a1, a2, b2))
+
+def rect_edges(x, y, size):
+    """返回格子的四条边的线段"""
+    return [
+        ((x, y), (x + size, y)),
+        ((x + size, y), (x + size, y + size)),
+        ((x + size, y + size), (x, y + size)),
+        ((x, y + size), (x, y))
+    ]
+
+def polygon_edges(polygon):
+    """返回多边形的边集合"""
+    n = len(polygon)
+    return [(polygon[i], polygon[(i + 1) % n]) for i in range(n)]
+
+poly_edges = polygon_edges(poly_points_px)
+
+# ------------------- 马赛克单元状态初始化 -------------------
+
+cell_colors = [[random.choice(color_choices) for _ in range(rows)] for _ in range(cols)]
+cell_colors2 = [[None for _ in range(rows)] for _ in range(cols)]
+cell_color_modes = [[
+    'dual' if random.random() < 0.4 else 'single'
+    for _ in range(rows)
+] for _ in range(cols)]
+cell_split_dirs = [[random.choice([2, 3]) for _ in range(rows)] for _ in range(cols)]
+
+next_switch_times = [[0 for _ in range(rows)] for _ in range(cols)]
+cell_parallel_angle = [[random.choice([0, 45, 90, 135]) for _ in range(rows)] for _ in range(cols)]
+
+base_interval = 3000
+interval_variance = 1000
+
+clock = pygame.time.Clock()
+
+# ------------------- 颜色相关函数 -------------------
+
+def neighbor_color_similarity(gx, gy, cell_colors, target_color):
+    neighbors = []
+    for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(1,-1),(-1,1),(1,1)]:
+        nx, ny = gx + dx, gy + dy
+        if 0 <= nx < cols and 0 <= ny < rows:
+            neighbors.append(cell_colors[nx][ny])
+    if not neighbors:
+        return 0
+    def color_dist(c1, c2):
+        return sum((a - b) ** 2 for a, b in zip(c1, c2)) ** 0.5
+    dist = sum(color_dist(c, target_color) for c in neighbors) / len(neighbors)
+    max_dist = (255**2 * 3) ** 0.5
+    return 1 - dist / max_dist
+
+def select_color_and_angle(gx, gy):
+    neighbors = []
+    for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(1,-1),(-1,1),(1,1)]:
+        nx, ny = gx + dx, gy + dy
+        if 0 <= nx < cols and 0 <= ny < rows:
+            neighbors.append((cell_colors[nx][ny], cell_parallel_angle[nx][ny]))
+    if not neighbors:
+        return random.choice(color_choices), random.choice([0,45,90,135])
+    col, ang = random.choice(neighbors)
+    if random.random() < 0.1:
+        col = random.choice(color_choices)
+    if random.random() < 0.1:
+        ang = random.choice([0,45,90,135])
+    return col, ang
+
+def apply_symmetry(gx, gy, new_color, new_color2, new_mode, rule_id):
+    sym_x = cols - 1 - gx
+    sym_y = rows - 1 - gy
+    cx, cy = cols // 2, rows // 2
+
+    if rule_id == 0:
+        cell_colors[gx][gy] = new_color
+        cell_colors2[gx][gy] = new_color2
+        cell_color_modes[gx][gy] = new_mode
+        if sym_x != gx:
+            cell_colors[sym_x][gy] = new_color
+            cell_colors2[sym_x][gy] = new_color2
+            cell_color_modes[sym_x][gy] = new_mode
+            cell_split_dirs[sym_x][gy] = cell_split_dirs[gx][gy]
+    elif rule_id == 1:
+        cell_colors[gx][gy] = new_color
+        cell_colors2[gx][gy] = new_color2
+        cell_color_modes[gx][gy] = new_mode
+        if sym_y != gy:
+            cell_colors[gx][sym_y] = new_color
+            cell_colors2[gx][sym_y] = new_color2
+            cell_color_modes[gx][sym_y] = new_mode
+            cell_split_dirs[gx][sym_y] = cell_split_dirs[gx][gy]
+    elif rule_id == 2:
+        rot_x = 2 * cx - gx - 1
+        rot_y = 2 * cy - gy - 1
+        cell_colors[gx][gy] = new_color
+        cell_colors2[gx][gy] = new_color2
+        cell_color_modes[gx][gy] = new_mode
+        if 0 <= rot_x < cols and 0 <= rot_y < rows:
+            cell_colors[rot_x][rot_y] = new_color
+            cell_colors2[rot_x][rot_y] = new_color2
+            cell_color_modes[rot_x][rot_y] = new_mode
+            cell_split_dirs[rot_x][rot_y] = cell_split_dirs[gx][gy]
+    elif rule_id == 3:
+        sym_pairs = [
+            (gx, gy),
+            (cols - 1 - gx, gy),
+            (gx, rows - 1 - gy),
+            (cols - 1 - gx, rows - 1 - gy)
+        ]
+        for (x, y) in sym_pairs:
+            if 0 <= x < cols and 0 <= y < rows:
+                cell_colors[x][y] = new_color
+                cell_colors2[x][y] = new_color2
+                cell_color_modes[x][y] = new_mode
+                cell_split_dirs[x][y] = cell_split_dirs[gx][gy]
+    else:
+        cell_colors[gx][gy] = new_color
+        cell_colors2[gx][gy] = new_color2
+        cell_color_modes[gx][gy] = new_mode
+
+def apply_burst(now):
+    if now % 1000 < 50:
+        bx = random.randint(0, cols - 4)
+        by = random.randint(0, rows - 4)
+        for x in range(bx, bx + 4):
+            for y in range(by, by + 4):
+                cell_colors[x][y] = random.choice(color_choices)
+                cell_color_modes[x][y] = random.choice(['single', 'dual'])
+                if cell_color_modes[x][y] == 'dual':
+                    cell_colors2[x][y] = random.choice(color_choices)
+                    cell_split_dirs[x][y] = random.choice([2, 3])
+                else:
+                    cell_colors2[x][y] = None
+                    cell_split_dirs[x][y] = None
+
+def time_space_wave(gx, gy, t):
+    freq_x = 0.3
+    freq_y = 0.2
+    speed = 0.002
+    val = math.sin(2 * math.pi * (freq_x * gx + freq_y * gy - speed * t))
+    return (val + 1) / 2
+
+# ------------------- 新增变量 -------------------
+show_inner_grid = True  # 是否显示封闭图形内的网格线
+
+def draw_grid_lines_with_optional_hole(show_hole=True):
+    step = 4
+    for x in range(cols + 1):
+        px = x * cell_size
+        for y in range(rows * step):
+            start_y = y * (cell_size / step)
+            end_y = (y + 1) * (cell_size / step)
+            mid_y = (start_y + end_y) / 2
+            inside = point_in_polygon(px, mid_y, poly_points_px)
+            if (not inside) or (inside and show_hole):
+                pygame.draw.line(screen, line_color, (px, start_y), (px, end_y))
+    for y in range(rows + 1):
+        py = y * cell_size
+        for x in range(cols * step):
+            start_x = x * (cell_size / step)
+            end_x = (x + 1) * (cell_size / step)
+            mid_x = (start_x + end_x) / 2
+            inside = point_in_polygon(mid_x, py, poly_points_px)
+            if (not inside) or (inside and show_hole):
+                pygame.draw.line(screen, line_color, (start_x, py), (end_x, py))
+
+
+# ------------------- 主循环 -------------------
+
+running = True
+while running:
+    now = pygame.time.get_ticks()
+    symmetry_rule = (now // 15000) % 5
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        # 按 Q 键切换封闭图形内网格显示状态
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_q:
+                show_inner_grid = not show_inner_grid
+
+    screen.fill(bg_color)
+
+    apply_burst(now)
+
+    for gx in range(cols):
+        for gy in range(rows):
+            rect_x = gx * cell_size
+            rect_y = gy * cell_size
+            center_x = rect_x + cell_size / 2
+            center_y = rect_y + cell_size / 2
+
+            center_inside = point_in_polygon(center_x, center_y, poly_points_px)
+
+            rect_lines = rect_edges(rect_x, rect_y, cell_size)
+            intersect = False
+            for r_edge in rect_lines:
+                for p_edge in poly_edges:
+                    if lines_intersect(r_edge[0], r_edge[1], p_edge[0], p_edge[1]):
+                        intersect = True
+                        break
+                if intersect:
+                    break
+
+            if center_inside or intersect:
+                edge_passed = intersect
+
+                if next_switch_times[gx][gy] == 0:
+                    next_switch_times[gx][gy] = now + random.randint(base_interval, base_interval + interval_variance)
+
+                if now >= next_switch_times[gx][gy]:
+                    wave_factor = time_space_wave(gx, gy, now)
+                    sim = neighbor_color_similarity(gx, gy, cell_colors, cell_colors[gx][gy])
+                    switch_chance = 0.3 + 0.6 * sim * wave_factor
+                    base_interval_mod = base_interval * (0.7 + 0.6 * wave_factor)
+
+                    if random.random() < switch_chance:
+                        old_color = cell_colors[gx][gy]
+
+                        if edge_passed:
+                            new_mode = 'single'
+                        else:
+                            new_mode = 'dual' if random.random() < 0.4 else 'single'
+
+                        new_color, new_angle = select_color_and_angle(gx, gy)
+
+                        trials = 0
+                        while new_color == old_color and trials < 10:
+                            new_color, new_angle = select_color_and_angle(gx, gy)
+                            trials += 1
+
+                        if new_mode == 'dual':
+                            new_color2 = new_color
+                            trials = 0
+                            while new_color2 == new_color and trials < 10:
+                                new_color2, _ = select_color_and_angle(gx, gy)
+                                trials += 1
+                            cell_split_dirs[gx][gy] = random.choice([2, 3])
+                        else:
+                            new_color2 = None
+                            cell_split_dirs[gx][gy] = None
+
+                        apply_symmetry(gx, gy, new_color, new_color2, new_mode, symmetry_rule)
+
+                        if new_color != old_color:
+                            cell_parallel_angle[gx][gy] = new_angle
+
+                        next_switch_times[gx][gy] = now + int(base_interval_mod + random.randint(0, interval_variance))
+                    else:
+                        next_switch_times[gx][gy] = now + 500
+
+                mosaic_surface = pygame.Surface((cell_size, cell_size))
+                mosaic_surface.fill(cell_colors[gx][gy])
+
+                second_color = cell_colors2[gx][gy]
+                split_mode = cell_split_dirs[gx][gy]
+
+                if cell_color_modes[gx][gy] == 'dual' and second_color is not None and split_mode is not None:
+                    mask = pygame.Surface((cell_size, cell_size), pygame.SRCALPHA)
+                    if split_mode == 2:
+                        points = [(0, 0), (cell_size, 0), (cell_size, cell_size)]
+                    else:
+                        points = [(0, 0), (cell_size, 0), (0, cell_size)]
+                    pygame.draw.polygon(mask, (*second_color, 255), points)
+                    mosaic_surface.blit(mask, (0, 0))
+
+                screen.blit(mosaic_surface, (rect_x, rect_y))
+
+    # 多边形白色遮罩
+    mask_surface = pygame.Surface((width, height))
+    mask_surface.fill((255, 255, 255))
+    pygame.draw.polygon(mask_surface, (0, 0, 0), poly_points_px)
+    mask_surface.set_colorkey((0, 0, 0))
+    screen.blit(mask_surface, (0, 0))
+
+    # 根据开关，画网格线，封闭图形内部网格线可关闭
+    draw_grid_lines_with_optional_hole(show_inner_grid)
+
+    # 画多边形边框
+    for i in range(len(poly_points_px)):
+        start = poly_points_px[i]
+        end = poly_points_px[(i + 1) % len(poly_points_px)]
+        pygame.draw.line(screen, connect_color, start, end, 2)
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()
+sys.exit()
