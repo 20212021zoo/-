@@ -1,0 +1,167 @@
+# Pygame 示例代码：click不再发声，而是扰动背景 drone 的波形，模拟特雷门琴感
+import pygame
+import sys
+import random
+import math
+import numpy as np
+import colorsys
+
+pygame.init()
+SAMPLE_RATE = 44100
+AMPLITUDE = 4096
+screen = pygame.display.set_mode((1000, 800))
+pygame.display.set_caption("Drone扰动 + HSV互补动画")
+clock = pygame.time.Clock()
+
+# 初始 Drone 状态变量
+drone_base_freq = 60
+drone_mod_freq = drone_base_freq
+mod_start_time = 0
+mod_duration = 200  # 每次扰动持续时间（毫秒）
+
+# 生成一个持续背景 Drone（基础正弦波）
+def generate_drone_buffer(frequency, duration=5.0):
+    t = np.linspace(0, duration, int(SAMPLE_RATE * duration), False)
+    wave = np.sin(2 * np.pi * frequency * t)
+    wave = AMPLITUDE * wave * 0.3
+    stereo = np.repeat(wave[:, np.newaxis], 2, axis=1)
+    return stereo.astype(np.int16)
+
+drone_buffer = generate_drone_buffer(drone_base_freq)
+drone_sound = pygame.sndarray.make_sound(drone_buffer)
+drone_sound.play(loops=-1)
+
+# 调制函数：更新 Drone 缓冲区以体现扰动
+def update_drone_modulated(frequency):
+    buffer = generate_drone_buffer(frequency)
+    return pygame.sndarray.make_sound(buffer)
+
+# HSV颜色工具函数
+def hsv_to_rgb(h, s, v):
+    r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    return int(r * 255), int(g * 255), int(b * 255)
+
+def lerp_color(c0, c1, t):
+    return tuple(int(c0[i] + (c1[i] - c0[i]) * t) for i in range(3))
+
+def get_new_colors(apply_hue_shift=False):
+    h1 = random.random()
+    h2 = (h1 + 0.5) % 1.0
+    hb1 = random.random()
+    hb2 = (hb1 + 0.5) % 1.0
+    if apply_hue_shift:
+        shift = random.random()
+        h1 = (h1 + shift) % 1.0
+        h2 = (h2 + shift) % 1.0
+        hb1 = (hb1 + shift) % 1.0
+        hb2 = (hb2 + shift) % 1.0
+    return (hsv_to_rgb(h1, 1, 1), hsv_to_rgb(h2, 1, 1)), (hsv_to_rgb(hb1, 1, 1), hsv_to_rgb(hb2, 1, 1))
+
+# 滑轨与按钮
+class Slider:
+    def __init__(self, x, y, height, min_val, max_val, value):
+        self.x = x
+        self.y = y
+        self.height = height
+        self.min = min_val
+        self.max = max_val
+        self.value = value
+        self.grabbed = False
+    def draw(self, surface):
+        pygame.draw.rect(surface, (100, 100, 100), (self.x - 5, self.y, 10, self.height))
+        pos_y = self.y + int((1 - (self.value - self.min) / (self.max - self.min)) * self.height)
+        pygame.draw.rect(surface, (255, 255, 255), (self.x - 10, pos_y - 5, 20, 10))
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            mx, my = event.pos
+            if self.x - 10 <= mx <= self.x + 10 and self.y <= my <= self.y + self.height:
+                self.grabbed = True
+        elif event.type == pygame.MOUSEBUTTONUP:
+            self.grabbed = False
+        elif event.type == pygame.MOUSEMOTION and self.grabbed:
+            _, my = event.pos
+            rel_y = max(0, min(self.height, my - self.y))
+            self.value = self.max - (rel_y / self.height) * (self.max - self.min)
+
+class Button:
+    def __init__(self, rect, label):
+        self.rect = pygame.Rect(rect)
+        self.label = label
+        self.font = pygame.font.SysFont(None, 24)
+        self.active = False
+    def draw(self, surface):
+        color = (255, 100, 100) if self.active else (50, 50, 200)
+        pygame.draw.rect(surface, color, self.rect)
+        text = self.font.render(self.label, True, (255, 255, 255))
+        surface.blit(text, (self.rect.x + 10, self.rect.y + 5))
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and self.rect.collidepoint(event.pos):
+            self.active = not self.active
+
+center, max_radius, bg_radius = (400, 400), 400, 1000
+cycle_duration_ms = 1000
+start_time = pygame.time.get_ticks()
+(color1, color2), (bg_color1, bg_color2) = get_new_colors()
+slider = Slider(900, 100, 300, 50, 3000, cycle_duration_ms)
+hue_shift_button = Button((840, 740, 100, 30), "Hue Shift")
+
+running = True
+while running:
+    clock.tick(120)
+    now = pygame.time.get_ticks()
+    elapsed = now - start_time
+    cycle_duration_ms = slider.value
+    progress = elapsed / cycle_duration_ms
+    radius = int(max_radius * progress)
+
+    if progress >= 1.0:
+        (color1, color2), (bg_color1, bg_color2) = get_new_colors(apply_hue_shift=hue_shift_button.active)
+        start_time = pygame.time.get_ticks()
+
+        # 启动频率扰动
+        mod_start_time = now
+        drone_mod_freq = drone_base_freq + random.randint(10, 40)
+        drone_sound.stop()
+        drone_sound = update_drone_modulated(drone_mod_freq)
+        drone_sound.play(loops=-1)
+
+    # 恢复基础频率
+    if now - mod_start_time > mod_duration and drone_mod_freq != drone_base_freq:
+        drone_mod_freq = drone_base_freq
+        drone_sound.stop()
+        drone_sound = update_drone_modulated(drone_base_freq)
+        drone_sound.play(loops=-1)
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        slider.handle_event(event)
+        hue_shift_button.handle_event(event)
+
+    # 背景绘制
+    bg_surface = pygame.Surface((1000, 800), pygame.SRCALPHA)
+    steps = 80
+    current_bg_radius = bg_radius * (1 - 0.4 * progress)
+    for i in range(steps, 0, -1):
+        t = i / steps
+        color = lerp_color(bg_color1, bg_color2, 1 - t)
+        alpha = int(140 * (1 - t ** 2.5))
+        pygame.draw.circle(bg_surface, (*color, alpha), center, int(current_bg_radius * t))
+    screen.blit(bg_surface, (0, 0))
+
+    # 主圆绘制
+    surface = pygame.Surface((max_radius * 2, max_radius * 2), pygame.SRCALPHA)
+    for r in range(radius, 0, -2):
+        strength = r / radius if radius else 0
+        alpha = int(255 * (1 - strength ** 1.5))
+        color = lerp_color(color1, color2, strength)
+        pygame.draw.circle(surface, (*color, alpha), (max_radius, max_radius), r)
+    screen.blit(surface, (center[0] - max_radius, center[1] - max_radius))
+
+    pygame.draw.line(screen, (200, 200, 200), (800, 0), (800, 800), 2)
+    slider.draw(screen)
+    hue_shift_button.draw(screen)
+    pygame.display.flip()
+
+pygame.quit()
+sys.exit()
