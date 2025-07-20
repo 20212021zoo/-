@@ -1,0 +1,117 @@
+import pygame
+import math
+
+pygame.init()
+
+WIDTH, HEIGHT = 1920, 800
+GRID_SIZE = 20
+COLUMNS = WIDTH // GRID_SIZE
+ROWS = HEIGHT // GRID_SIZE
+
+# 颜色调色板
+TONE_PALETTE = [
+    (20, 20, 20),       # 黑
+    (235, 235, 235),    # 白
+    (150, 60, 50),      # 赭红
+    (40, 60, 110),      # 靛蓝
+    (80, 120, 100),     # 青绿
+    (230, 210, 90),     # 未来钛黄 ✨
+    (120, 90, 110),     # 灰玫瑰紫
+    (60, 50, 40),       # 木炭褐
+]
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("数字织布合成器 - 图腾动态")
+clock = pygame.time.Clock()
+
+# === 图案函数定义 ===
+
+def pattern_rhombus(x, y, frame):
+    dx = x - COLUMNS // 2
+    dy = y - ROWS // 2
+    d = abs(dx) + abs(dy)
+    return d % len(TONE_PALETTE)
+
+def pattern_horizontal_wave(x, y, frame):
+    val = math.sin(y * 0.3 + frame * 0.02)
+    return int((val + 1) * (len(TONE_PALETTE) - 1) / 2)
+
+def pattern_tilted_waveband(x, y, frame):
+    val = math.sin((x + y) * 0.25 + frame * 0.02)
+    return int((val + 1) * (len(TONE_PALETTE) - 1) / 2)
+
+def pattern_triangle_teeth(x, y, frame):
+    band = (abs(x - y) // 4 + frame // 50) % len(TONE_PALETTE)
+    return band
+
+# 新增：多层菱形嵌套（神坛图案）
+def pattern_nested_rhombus(x, y, frame):
+    dx = x - COLUMNS // 2
+    dy = y - ROWS // 2
+    d = abs(dx) + abs(dy)
+    layer = ((d + (frame // 10)) // 4) % len(TONE_PALETTE)
+    return layer
+
+PATTERN_FUNCS = [
+    pattern_rhombus,
+    pattern_horizontal_wave,
+    pattern_tilted_waveband,
+    pattern_triangle_teeth,
+    pattern_nested_rhombus,  # 新增图案，作为最后一个模式
+]
+
+def pattern_weaving_stripes(x, y, frame):
+    # 横竖条纹交织
+    horiz = (x // 3 + frame // 30) % len(TONE_PALETTE)
+    vert = (y // 3 + frame // 40) % len(TONE_PALETTE)
+    # 交叉叠加，取两者较小的色彩索引，制造纹理层次感
+    return min(horiz, vert)
+
+def lerp(a, b, t):
+    return a * (1 - t) + b * t
+
+def color_offset(base_color, x, y, frame):
+    offset_r = int(10 * math.sin(0.01 * frame + x * 0.15 + y * 0.1))
+    offset_g = int(10 * math.sin(0.013 * frame + x * 0.12 + y * 0.12 + 20))
+    offset_b = int(10 * math.sin(0.009 * frame + x * 0.2 + y * 0.13 + 40))
+    r = max(0, min(255, base_color[0] + offset_r))
+    g = max(0, min(255, base_color[1] + offset_g))
+    b = max(0, min(255, base_color[2] + offset_b))
+    return (r, g, b)
+
+def get_interpolated_pattern_index(x, y, frame, mode1, mode2, t):
+    i1 = PATTERN_FUNCS[mode1](x, y, frame)
+    i2 = PATTERN_FUNCS[mode2](x, y, frame)
+    interp_index = int(lerp(i1, i2, t)) % len(TONE_PALETTE)
+    return interp_index
+
+frame = 0
+transition_duration = 600
+mode_count = len(PATTERN_FUNCS)
+running = True
+
+while running:
+    frame += 1
+    screen.fill((0, 0, 0))
+
+    phase = (frame // transition_duration) % mode_count
+    t = (frame % transition_duration) / transition_duration
+    mode1 = phase
+    mode2 = (phase + 1) % mode_count
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    for y in range(ROWS):
+        for x in range(COLUMNS):
+            color_index = get_interpolated_pattern_index(x, y, frame, mode1, mode2, t)
+            base_color = TONE_PALETTE[color_index]
+            final_color = color_offset(base_color, x, y, frame)
+            rect = pygame.Rect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+            pygame.draw.rect(screen, final_color, rect)
+
+    pygame.display.flip()
+    clock.tick(30)
+
+pygame.quit()
